@@ -1,0 +1,4 @@
+# Force LF for all text files so Linux shell scripts / systemd units work correctly
+* text=auto eol=lf
+*.png binary
+*.xlsx binary

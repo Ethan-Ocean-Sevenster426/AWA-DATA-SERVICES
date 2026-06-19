@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the Transit External Customer Report daily
+
+[Timer]
+# Every day at 06:00 (server local time). Adjust as needed.
+OnCalendar=*-*-* 06:00:00
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

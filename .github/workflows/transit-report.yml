@@ -1,0 +1,35 @@
+name: Transit External Report
+
+# Zero-server option: GitHub-hosted Linux runner on a schedule.
+# Store the secrets/vars under: Settings -> Secrets and variables -> Actions.
+on:
+  schedule:
+    - cron: "0 6 * * *"      # 06:00 UTC daily
+  workflow_dispatch: {}        # allow manual runs
+
+jobs:
+  pull-and-upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Run report
+        env:
+          CW_USERNAME:         ${{ secrets.CW_USERNAME }}
+          CW_PASSWORD:         ${{ secrets.CW_PASSWORD }}
+          CW_BRANCH_CODES:     ${{ vars.CW_BRANCH_CODES }}
+          AZURE_TENANT_ID:     ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID:     ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          SHAREPOINT_HOSTNAME: ${{ vars.SHAREPOINT_HOSTNAME }}
+          SHAREPOINT_SITE_PATH: ${{ vars.SHAREPOINT_SITE_PATH }}
+          SHAREPOINT_FOLDER:   ${{ vars.SHAREPOINT_FOLDER }}
+          UPLOAD: "true"
+        run: python transit_report.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: external-report
+          path: output/*.xlsx

@@ -1,0 +1,20 @@
+[Unit]
+Description=AWA Data Services - Transit External Customer Report pull + SharePoint upload
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Adjust user and paths to your deployment
+User=awa
+WorkingDirectory=/opt/awa-data-services
+EnvironmentFile=/etc/awa-data-services/transit_report.env
+ExecStart=/opt/awa-data-services/.venv/bin/python /opt/awa-data-services/transit_report.py
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/awa-data-services/output
+
+[Install]
+WantedBy=multi-user.target
