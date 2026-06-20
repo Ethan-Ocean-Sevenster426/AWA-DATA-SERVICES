@@ -13,7 +13,7 @@ branch and writes two Excel files matching the existing master format, then
 
 Config is environment-driven (see .env.example). No secrets are stored in code.
 """
-import os, sys, json, re, logging, datetime, collections
+import os, sys, json, re, logging, datetime, calendar, collections
 import urllib.request, urllib.parse, urllib.error, http.cookiejar
 
 # ---- tiny .env loader (no dependency) ----
@@ -39,6 +39,8 @@ CW_USERNAME  = _env("CW_USERNAME", required=True)
 CW_PASSWORD  = _env("CW_PASSWORD", required=True)
 BRANCH_CODE  = _env("CC_BRANCH_CODE", "CON").upper()
 DEPT_CODE    = _env("CW_DEPARTMENT_CODE", "BRN").upper()
+# CargoWise "Cycle Count Tasks" view filter: End Time was in the last N months (0 = no filter)
+REPORT_MONTHS = int(_env("CC_REPORT_MONTHS", "12"))
 
 OUTDIR        = _env("OUTPUT_DIR", "./output")
 FULL_FILE     = _env("CC_FULL_FILENAME", "Cycle Count Data Full.xlsx")
@@ -66,6 +68,14 @@ _opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_cookie
 
 def _http(url, data=None, headers=None, method=None, timeout=180):
     return _opener.open(urllib.request.Request(url, data=data, headers=headers or {}, method=method), timeout=timeout)
+
+def months_ago_iso(months):
+    t = datetime.date.today()
+    idx = t.month - 1 - months
+    year = t.year + idx // 12
+    month = idx % 12 + 1
+    day = min(t.day, calendar.monthrange(year, month)[1])
+    return f"{year:04d}-{month:02d}-{day:02d}T00:00:00Z"
 
 def parse_dt(s):
     if not s:
@@ -139,11 +149,15 @@ class CargoWise:
 
     def pull_cycle_counts(self):
         rows, skip, page = [], 0, 50
+        # Match the CargoWise view: End Time was in the last N months
+        cutoff = months_ago_iso(REPORT_MONTHS) if REPORT_MONTHS > 0 else None
+        base = {"$select": "WIC_JobID,WIC_Status,WIC_Priority,WIC_GS_NKAssignedTo,WIC_StartTime,"
+                           "WIC_EndTime,WIC_WIC_RejectedCycleCount,WIC_SystemCreateTimeUtc",
+                "$expand": "Location($select=WLV_LocationString)", "$orderby": "WIC_JobID"}
+        if cutoff:
+            base["$filter"] = f"WIC_EndTime ge {cutoff}"
         while True:
-            params = {"$select": "WIC_JobID,WIC_Status,WIC_Priority,WIC_GS_NKAssignedTo,WIC_StartTime,"
-                                 "WIC_EndTime,WIC_WIC_RejectedCycleCount,WIC_SystemCreateTimeUtc",
-                      "$expand": "Location($select=WLV_LocationString)",
-                      "$top": str(page), "$skip": str(skip), "$orderby": "WIC_JobID"}
+            params = {**base, "$top": str(page), "$skip": str(skip)}
             for _ in range(4):
                 try:
                     d = self._get("WhsItemCycleCountLocations", params); break
