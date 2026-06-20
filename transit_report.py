@@ -164,7 +164,7 @@ class CargoWise:
     def pull_branch(self, branch_key, cutoff_iso):
         self._select_branch(branch_key)
         expand = ("Addresses($expand=Address($expand=OrgHeader,Country)),"
-                  "WhsItemPackageStates($select=WPS_Status)")
+                  "WhsItemPackageStates($select=WPS_Status;$expand=Package($select=KP_Weight,KP_Volume))")
         filt = (f"not startswith(tolower(WRC_ConsignmentID),'s00') and "
                 f"WhsItemPackageStates/any(p: p/WPS_UnloadedTime ge {cutoff_iso}) and "
                 f"not WhsItemPackageStates/any(p: p/WPS_Status eq 'DEP')")
@@ -193,11 +193,23 @@ class CargoWise:
 # --------------------------------------------------------------------------- #
 # Report shaping (matches master template "External Report.xlsx")
 # --------------------------------------------------------------------------- #
-COLUMNS = ["Branch", "Receive Consignment ID", "Closed", "RCN Reference", "Consignor",
-           "Consignee", "Booking Party", "Expected Arrival at Warehouse",
-           "Expected Dispatch from Warehouse", "Next Discharge Port", "Service Level",
-           "BKD", "In Warehouse", "DEP", "Overs", "Number of Packages", "Column1"]
-DATE_COLS = {"Closed", "Expected Arrival at Warehouse", "Expected Dispatch from Warehouse"}
+# Sheet 1 - "External Report" (matches master template)
+EXT_COLUMNS = ["Branch", "Receive Consignment ID", "Closed", "RCN Reference", "Consignor",
+               "Consignee", "Booking Party", "Expected Arrival at Warehouse",
+               "Expected Dispatch from Warehouse", "Next Discharge Port", "Service Level",
+               "BKD", "In Warehouse", "DEP", "Overs", "Number of Packages", "Column1"]
+# Sheet 2 - "Receive Consignment" (operational view: created/user + weight/volume)
+RC_COLUMNS = ["Branch", "Created Time", "Closed", "Receive Consignment ID", "RCN Reference",
+              "Number of Packages", "BKD", "In Warehouse", "DEP", "Booking Party",
+              "Total Weight", "Total Volume", "Consignor", "Consignee", "Service Level",
+              "Create User Code"]
+DATE_COLS = {"Closed", "Expected Arrival at Warehouse", "Expected Dispatch from Warehouse", "Created Time"}
+WIDTHS = {"Branch": 8, "Receive Consignment ID": 22.6, "Closed": 15.6, "Created Time": 15.6,
+          "RCN Reference": 14.9, "Consignor": 40, "Consignee": 40, "Booking Party": 55,
+          "Expected Arrival at Warehouse": 28.5, "Expected Dispatch from Warehouse": 32.5,
+          "Next Discharge Port": 19, "Service Level": 18, "BKD": 8, "In Warehouse": 12,
+          "DEP": 8, "Overs": 8, "Number of Packages": 18, "Column1": 10,
+          "Total Weight": 13, "Total Volume": 13, "Create User Code": 14}
 INWHS = {"ARV", "PUT", "PIC", "CTT", "STA", "FLO", "REC", "RCV"}
 
 def _addr(rec, atype):
@@ -217,8 +229,12 @@ def _addr(rec, atype):
     return "", "", ""
 
 def _counts(rec):
-    c = collections.Counter(p.get("WPS_Status") for p in rec.get("WhsItemPackageStates", []))
-    return c.get("BKD", 0), sum(v for k, v in c.items() if k in INWHS), c.get("DEP", 0), sum(c.values())
+    ps = rec.get("WhsItemPackageStates", [])
+    c = collections.Counter(p.get("WPS_Status") for p in ps)
+    weight = sum((p.get("Package") or {}).get("KP_Weight") or 0 for p in ps)
+    volume = sum((p.get("Package") or {}).get("KP_Volume") or 0 for p in ps)
+    return (c.get("BKD", 0), sum(v for k, v in c.items() if k in INWHS), c.get("DEP", 0),
+            sum(c.values()), round(weight, 3), round(volume, 3))
 
 def shape_rows(branch, records, svc_map):
     out = []
@@ -230,12 +246,13 @@ def shape_rows(branch, records, svc_map):
             continue
         cnr, _, _ = _addr(r, "CRG")
         cne, _, _ = _addr(r, "CED")
-        bkd, inw, dep, tot = _counts(r)
+        bkd, inw, dep, tot, weight, volume = _counts(r)
         sl = r.get("WRC_RS_NKServiceLevel") or ""
         sl = f"{sl} - {svc_map[sl]}" if sl in svc_map else sl
         out.append({
             "Branch": branch,
             "Receive Consignment ID": r.get("WRC_JobID"),
+            "Created Time": parse_dt(r.get("WRC_SystemCreateTimeUtc")),
             "Closed": parse_dt(r.get("WRC_CompleteTime")),
             "RCN Reference": r.get("WRC_ConsignmentID"),
             "Consignor": cnr, "Consignee": cne, "Booking Party": bp_full,
@@ -245,6 +262,8 @@ def shape_rows(branch, records, svc_map):
             "Service Level": sl,
             "BKD": bkd, "In Warehouse": inw, "DEP": dep, "Overs": 0,
             "Number of Packages": tot, "Column1": None,
+            "Total Weight": weight, "Total Volume": volume,
+            "Create User Code": r.get("WRC_SystemCreateUser"),
         })
     return out
 
@@ -252,28 +271,28 @@ def build_workbook(rows, path):
     import openpyxl
     from openpyxl.utils import get_column_letter
     from openpyxl.worksheet.table import Table, TableStyleInfo
-    widths = {"Branch": 8, "Receive Consignment ID": 22.6, "Closed": 15.6, "RCN Reference": 14.9,
-              "Consignor": 40, "Consignee": 40, "Booking Party": 55,
-              "Expected Arrival at Warehouse": 28.5, "Expected Dispatch from Warehouse": 32.5,
-              "Next Discharge Port": 19, "Service Level": 18, "BKD": 8, "In Warehouse": 12,
-              "DEP": 8, "Overs": 8, "Number of Packages": 18, "Column1": 10}
+
+    def add_sheet(wb, title, columns, table_name):
+        ws = wb.create_sheet(title)
+        ws.append(columns)
+        for r in rows:
+            ws.append([r.get(c) for c in columns])
+        for ci, col in enumerate(columns, 1):
+            L = get_column_letter(ci)
+            ws.column_dimensions[L].width = WIDTHS.get(col, 12)
+            if col in DATE_COLS:
+                for cell in ws[L][1:]:
+                    cell.number_format = "dd-mmm-yy hh:mm"
+        ws.freeze_panes = "A2"
+        ref = f"A1:{get_column_letter(len(columns))}{len(rows) + 1}"
+        tbl = Table(displayName=table_name, ref=ref)
+        tbl.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True)
+        ws.add_table(tbl)
+
     wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "External Report"
-    ws.append(COLUMNS)
-    for r in rows:
-        ws.append([r[c] for c in COLUMNS])
-    for ci, col in enumerate(COLUMNS, 1):
-        L = get_column_letter(ci)
-        ws.column_dimensions[L].width = widths.get(col, 12)
-        if col in DATE_COLS:
-            for cell in ws[L][1:]:
-                cell.number_format = "dd-mmm-yy hh:mm"
-    ws.freeze_panes = "A2"
-    ref = f"A1:{get_column_letter(len(COLUMNS))}{len(rows) + 1}"
-    tbl = Table(displayName="ExternalReport", ref=ref)
-    tbl.tableStyleInfo = TableStyleInfo(name="TableStyleMedium2", showRowStripes=True)
-    ws.add_table(tbl)
+    wb.remove(wb.active)
+    add_sheet(wb, "External Report", EXT_COLUMNS, "ExternalReport")
+    add_sheet(wb, "Receive Consignment", RC_COLUMNS, "ReceiveConsignment")
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     wb.save(path)
 
