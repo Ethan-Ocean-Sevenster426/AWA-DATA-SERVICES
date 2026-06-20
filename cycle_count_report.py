@@ -41,6 +41,10 @@ BRANCH_CODE  = _env("CC_BRANCH_CODE", "CON").upper()
 DEPT_CODE    = _env("CW_DEPARTMENT_CODE", "BRN").upper()
 # CargoWise "Cycle Count Tasks" view filter: End Time was in the last N months (0 = no filter)
 REPORT_MONTHS = int(_env("CC_REPORT_MONTHS", "12"))
+# CargoWise displays timestamps in a fixed offset (UTC-06:00). Each raw value carries its own
+# offset (e.g. Start -07:00, End -05:00); we normalise every value to this display offset so
+# durations and times match the CargoWise grid / master file.
+DISPLAY_TZ_OFFSET = float(_env("CC_DISPLAY_TZ_OFFSET", "-6"))
 
 OUTDIR        = _env("OUTPUT_DIR", "./output")
 FULL_FILE     = _env("CC_FULL_FILENAME", "Cycle Count Data Full.xlsx")
@@ -78,16 +82,24 @@ def months_ago_iso(months):
     return f"{year:04d}-{month:02d}-{day:02d}T00:00:00Z"
 
 def parse_dt(s):
+    """Parse a CargoWise DateTimeOffset, normalise to the fixed display offset, truncate to minute."""
     if not s:
         return None
-    m = re.match(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):?(\d{2})?", s)  # wall-clock
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})?", s)
     if not m:
         return None
-    y, mo, d, h, mi, se = m.groups()
+    y, mo, d, h, mi = (int(x) for x in m.groups()[:5])
+    se = int(m.group(6) or 0)
+    off = m.group(7)
     try:
-        return datetime.datetime(int(y), int(mo), int(d), int(h), int(mi), int(se or 0))
+        dt = datetime.datetime(y, mo, d, h, mi, se)
     except ValueError:
         return None
+    if off and off != "Z":                       # source offset -> UTC
+        sign = 1 if off[0] == "+" else -1
+        dt -= datetime.timedelta(hours=sign * int(off[1:3]), minutes=sign * int(off[-2:]))
+    dt += datetime.timedelta(hours=DISPLAY_TZ_OFFSET)   # UTC -> fixed display offset
+    return dt.replace(second=0, microsecond=0)
 
 def status_text(code):
     if not code:
