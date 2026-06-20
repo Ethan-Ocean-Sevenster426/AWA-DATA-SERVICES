@@ -216,7 +216,7 @@ def _write_sheet(ws, columns, rows, table_name):
                                                        "Start Time", "End Time") else 14
         if col in DATE_COLS:
             for cell in ws[L][1:]:
-                cell.number_format = "yyyy-mm-dd hh:mm:ss"
+                cell.number_format = "dd-mmm-yy hh:mm"
     ws.freeze_panes = "A2"
     if rows:
         ws.add_table(Table(displayName=table_name,
