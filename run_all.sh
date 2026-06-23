@@ -18,6 +18,7 @@ SCRIPTS=(
   rcn_pending_services_report.py
   mikes_bonded_check_report.py
   unknown_received_report.py
+  dtu_report.py
 )
 
 rc=0
