@@ -1,0 +1,21 @@
+[Unit]
+Description=AWA Data Services - all CargoWise -> SharePoint reports (pull + upload)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=awa
+WorkingDirectory=/opt/awa-data-services
+EnvironmentFile=/etc/awa-data-services/transit_report.env
+Environment=PYTHON=/opt/awa-data-services/.venv/bin/python
+ExecStart=/bin/bash /opt/awa-data-services/run_all.sh
+TimeoutStartSec=3600
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/awa-data-services/output
+
+[Install]
+WantedBy=multi-user.target

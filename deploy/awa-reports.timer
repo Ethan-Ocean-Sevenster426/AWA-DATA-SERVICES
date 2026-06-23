@@ -1,0 +1,11 @@
+[Unit]
+Description=Run all AWA Data Services reports hourly
+
+[Timer]
+# Top of every hour (server local time), with a small jitter to avoid a hard spike.
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target
