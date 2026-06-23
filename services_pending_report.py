@@ -302,7 +302,7 @@ def main():
     build_workbook(all_rows, out_path)
     log.info("Workbook written: %s (%d rows)", out_path, len(all_rows))
     if DO_UPLOAD:
-        upload(out_path)
+        import sp_upload; sp_upload.upload(out_path, SP_FOLDER)
     else:
         log.info("UPLOAD disabled; skipping SharePoint upload")
     log.info("Done.")

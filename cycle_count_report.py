@@ -56,7 +56,7 @@ AZ_CLIENT  = _env("AZURE_CLIENT_ID")
 AZ_SECRET  = _env("AZURE_CLIENT_SECRET")
 SP_HOST    = _env("SHAREPOINT_HOSTNAME")
 SP_SITE    = _env("SHAREPOINT_SITE_PATH")
-SP_FOLDER  = _env("CC_SHAREPOINT_FOLDER", _env("SHAREPOINT_FOLDER", ""))
+SP_FOLDER  = _env("CC_SHAREPOINT_FOLDER", "Cycle Count Report")
 
 ALL_ZONES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "cycle_count_all_zones.json")
 
@@ -290,7 +290,7 @@ def main():
     log.info("Wrote %s (%d unique locations)", dedup_path, len(latest))
 
     if DO_UPLOAD:
-        upload(full_path); upload(dedup_path)
+        import sp_upload; sp_upload.upload(full_path, SP_FOLDER); sp_upload.upload(dedup_path, SP_FOLDER)
     else:
         log.info("UPLOAD disabled; skipping SharePoint upload")
     log.info("Done.")

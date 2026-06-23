@@ -58,7 +58,7 @@ AZ_CLIENT      = _env("AZURE_CLIENT_ID")
 AZ_SECRET      = _env("AZURE_CLIENT_SECRET")
 SP_HOST        = _env("SHAREPOINT_HOSTNAME")
 SP_SITE        = _env("SHAREPOINT_SITE_PATH")           # e.g. /sites/DataPrime
-SP_FOLDER      = _env("SHAREPOINT_FOLDER", "")          # e.g. External Report Transit Pull
+SP_FOLDER      = _env("SHAREPOINT_FOLDER", "External Report Transit Pull")          # e.g. External Report Transit Pull
 
 log = logging.getLogger("transit_report")
 
@@ -352,7 +352,7 @@ def main():
     log.info("Workbook written: %s (%d rows)", out_path, len(all_rows))
 
     if DO_UPLOAD:
-        upload_to_sharepoint(out_path)
+        import sp_upload; sp_upload.upload(out_path, SP_FOLDER)
     else:
         log.info("UPLOAD disabled; skipping SharePoint upload")
     log.info("Done.")

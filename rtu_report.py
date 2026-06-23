@@ -47,7 +47,7 @@ DO_UPLOAD    = _env("UPLOAD", "true").lower() in ("1", "true", "yes")
 
 AZ_TENANT  = _env("AZURE_TENANT_ID"); AZ_CLIENT = _env("AZURE_CLIENT_ID"); AZ_SECRET = _env("AZURE_CLIENT_SECRET")
 SP_HOST    = _env("SHAREPOINT_HOSTNAME"); SP_SITE = _env("SHAREPOINT_SITE_PATH")
-SP_FOLDER  = _env("RTU_SHAREPOINT_FOLDER", _env("SHAREPOINT_FOLDER", ""))
+SP_FOLDER  = _env("RTU_SHAREPOINT_FOLDER", "RTU Report")
 
 COLUMNS = ["Branch", "Receive Transportation Unit ID", "RTU Reference", "Transport Company",
            "Drivers Name", "Unloaded Packages", "Unload Complete", "Gate in Time"] + [f"Column{i}" for i in range(1, 9)]
@@ -257,7 +257,7 @@ def main():
     build_workbook(all_rows, out_path)
     log.info("Workbook written: %s (%d rows)", out_path, len(all_rows))
     if DO_UPLOAD:
-        upload(out_path)
+        import sp_upload; sp_upload.upload(out_path, SP_FOLDER)
     else:
         log.info("UPLOAD disabled; skipping SharePoint upload")
     log.info("Done.")
