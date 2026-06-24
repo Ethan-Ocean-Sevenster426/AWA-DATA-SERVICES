@@ -2,10 +2,11 @@
 Description=Run all AWA Data Services reports once daily
 
 [Timer]
-# Once a day at 06:00 server time (UTC). The orchestrator (run_reports.py) then
-# decides which reports run today: most run every day, Cycle Count runs Mon+Fri,
-# Unknown Received runs Fri only. Change the hour below to reschedule.
-OnCalendar=*-*-* 06:00:00
+# Once a day at 12:00 (noon) South African time = 10:00 UTC. The orchestrator
+# (run_reports.py) then decides which reports run today: most run every day,
+# Cycle Count runs Mon+Fri, Unknown Received runs Fri only. Change the hour below
+# to reschedule (the Africa/Johannesburg suffix keeps it noon local).
+OnCalendar=*-*-* 12:00:00 Africa/Johannesburg
 Persistent=true
 RandomizedDelaySec=300
 
