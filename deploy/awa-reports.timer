@@ -1,11 +1,13 @@
 [Unit]
-Description=Run all AWA Data Services reports hourly
+Description=Run all AWA Data Services reports once daily
 
 [Timer]
-# Top of every hour (server local time), with a small jitter to avoid a hard spike.
-OnCalendar=hourly
+# Once a day at 06:00 server time (UTC). The orchestrator (run_reports.py) then
+# decides which reports run today: most run every day, Cycle Count runs Mon+Fri,
+# Unknown Received runs Fri only. Change the hour below to reschedule.
+OnCalendar=*-*-* 06:00:00
 Persistent=true
-RandomizedDelaySec=120
+RandomizedDelaySec=300
 
 [Install]
 WantedBy=timers.target

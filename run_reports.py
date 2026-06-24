@@ -45,6 +45,14 @@ REPORTS = [
     ("open_dtu_report.py",             "Open DTU's (CCC)"),
 ]
 
+# Per-report run days (Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6).
+# Scripts not listed here run EVERY day. Weekday is evaluated in the server's
+# timezone (UTC), which matches when the daily timer fires.
+RUN_DAYS = {
+    "cycle_count_report.py":      {0, 4},   # Monday + Friday only
+    "unknown_received_report.py": {4},      # Friday only
+}
+
 def now():
     return datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
 
@@ -101,13 +109,21 @@ def run_one(script):
 def main():
     state = load_state()
     started = now()
+    today = now().weekday()   # Mon=0 .. Sun=6 (UTC, matches the daily timer)
     results = []
     for script, name in REPORTS:
+        st = state.get(script, {})
+        days = RUN_DAYS.get(script)
+        if days is not None and today not in days:
+            print(f"==== {now().isoformat()} {script} (skipped - not scheduled today) ====", flush=True)
+            results.append({"script": script, "name": name, "ok": True, "skipped": True,
+                            "rows": None, "last_success": st.get("last_success"),
+                            "last_rows": st.get("rows"), "error": None})
+            continue
         print(f"==== {now().isoformat()} {script} ====", flush=True)
         ok, out = run_one(script)
         print(out, flush=True)
         rows = parse_rows(out)
-        st = state.get(script, {})
         if ok:
             st["last_success"] = now().isoformat()
             st["rows"] = rows if rows is not None else st.get("rows")
@@ -115,13 +131,15 @@ def main():
         else:
             err = plain_error(out)
         state[script] = st
-        results.append({"script": script, "name": name, "ok": ok, "rows": rows,
+        results.append({"script": script, "name": name, "ok": ok, "skipped": False, "rows": rows,
                         "last_success": st.get("last_success"),
                         "last_rows": st.get("rows"), "error": err})
     save_state(state)
 
-    ok_n = sum(1 for r in results if r["ok"])
-    fail_n = len(results) - ok_n
+    skip_n = sum(1 for r in results if r.get("skipped"))
+    fail_n = sum(1 for r in results if not r["ok"])
+    ok_n = sum(1 for r in results if r["ok"] and not r.get("skipped"))
+    ran = len(results) - skip_n
     finished = now()
     overall = "ALL OK" if fail_n == 0 else f"{fail_n} FAILED"
     subj = f"AWA Reports - {overall} - {finished.strftime('%d %b %Y %H:%M UTC')}"
@@ -130,22 +148,30 @@ def main():
     lines = []
     lines.append(f"<p>Here is the status of your CargoWise &rarr; SharePoint reports.</p>")
     lines.append(f"<p><b>Run finished:</b> {finished.strftime('%d %b %Y %H:%M UTC')}<br>"
-                 f"<b>Overall:</b> {ok_n} of {len(results)} reports updated successfully.</p>")
+                 f"<b>Overall:</b> {ok_n} of {ran} scheduled reports updated successfully"
+                 + (f" ({skip_n} not scheduled today)" if skip_n else "") + ".</p>")
     lines.append("<table cellpadding='6' style='border-collapse:collapse;font-family:Segoe UI,Arial,sans-serif;font-size:13px'>")
     lines.append("<tr style='background:#f0f0f0'><th align='left'>Report</th><th align='left'>Status</th>"
                  "<th align='right'>Rows</th><th align='left'>Last successful pull</th></tr>")
     for r in results:
-        if r["ok"]:
+        if r.get("skipped"):
+            status = "<span style='color:#5f6368'>&#9679; Not scheduled today</span>"
+            rows = rowsf(r["last_rows"]) + (" (last)" if r["last_rows"] is not None else "")
+            when = fmt_when(r["last_success"])
+            note = ""
+            bg = "#f8f9fa"
+        elif r["ok"]:
             status = "<span style='color:#137333'>&#10004; Updated</span>"
             rows = rowsf(r["rows"])
             when = fmt_when(r["last_success"])
             note = ""
+            bg = "#ffffff"
         else:
             status = "<span style='color:#c5221f'>&#10008; Failed</span>"
             rows = rowsf(r["last_rows"]) + " (last good)"
             when = fmt_when(r["last_success"])
             note = f"<br><span style='color:#c5221f'>{r['error']}</span>"
-        bg = "#ffffff" if r["ok"] else "#fdecea"
+            bg = "#fdecea"
         lines.append(f"<tr style='background:{bg}'><td>{r['name']}{note}</td><td>{status}</td>"
                      f"<td align='right'>{rows}</td><td>{when}</td></tr>")
     lines.append("</table>")
