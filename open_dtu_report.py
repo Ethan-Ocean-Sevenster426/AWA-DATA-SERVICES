@@ -1,21 +1,25 @@
 #!/usr/bin/env python3
 """
-AWA Data Services - Open RTU's Report
-=====================================
-Pulls the "OPEN RTU'S" saved search (Receive Transportation Units that have been
-created but not yet unloaded) from CargoWise TWD (WiseGrid) for both branches
-(DOR + CON), and writes a single "Receive Transportation Unit" sheet matching the
-master "Open RTU's.xlsx", then (optionally) uploads to SharePoint via Graph.
+AWA Data Services - Open DTU's Report (CCC)
+===========================================
+The dispatch grid "CCC- DTU (Mika)" reproduced exactly: ALL dispatch transportation
+units for the CCC branch (no active filter -> 1,304 units), with the same 13 columns
+as the grid, then uploaded to SharePoint via the shared uploader.
 
-Saved search "OPEN RTU'S" (module IEntityInfo_IWhsItemReceiveTransportationUnit):
-  * CREATETIME          HasDate     -> WRH_SystemCreateTimeUtc ne null
-  * UNLOADCOMPLETETIME  HasNoDate   -> WRH_UnloadCompleteTime  eq null
-Both conditions are reproduced exactly (validated: returns the same 6 CON rows the
-live grid shows).
-
-Timezone: "Created Time" (actual) is converted true-instant -> display tz (UTC-6),
-matching the master file (verified TR00055946 16:09Z -> 10:09). "Unload Complete"
-is blank by definition for open RTUs.
+Column sources (validated against the live CCC grid):
+  Created time                    WDH_SystemCreateTimeUtc           (UTC-6 display)
+  Dispatch transportation unit ID WDH_ReferenceNumber
+  DTU reference                   WDH_VehicleReference
+  Load list ID                    join of WDL_JobID over linked load lists
+  Master bill                     join of load-list ReferenceNumbers CE_EntryType=='MAB'
+  Transport company               TRA address
+  Drivers name                    WDH_SignedBy
+  FLO                             LoadedLoosePackagesCount
+  Loaded handling units           TotalLoadedPackagesCount - LoadedLoosePackagesCount
+  Remaining                       max(0, TotalPlannedPackagesCount - TotalLoadedPackagesCount)
+  Staging location                join of load-list StagingLocation.WLV_LocationString
+  Completion date                 WDH_LoadCompleteTime
+  Status                          derived from load state (see status_of)
 
 Config is environment-driven (see .env.example). No secrets are stored in code.
 """
@@ -42,24 +46,21 @@ CW_MODULE    = _env("CW_MODULE", "TWD")
 ODATA_MODEL  = _env("CW_ODATA_MODEL", "TransitWarehouse")
 CW_USERNAME  = _env("CW_USERNAME", required=True)
 CW_PASSWORD  = _env("CW_PASSWORD", required=True)
-BRANCH_CODES = [b.strip().upper() for b in _env("OPENRTU_BRANCH_CODES", "DOR,CON").split(",") if b.strip()]
+BRANCH_CODES = [b.strip().upper() for b in _env("ODTU_BRANCH_CODES", "CCC").split(",") if b.strip()]
 DEPT_CODE    = _env("CW_DEPARTMENT_CODE", "BRN").upper()
-DISPLAY_TZ_OFFSET = float(_env("CC_DISPLAY_TZ_OFFSET", "-6"))   # CargoWise fixed display offset
+DISPLAY_TZ_OFFSET = float(_env("CC_DISPLAY_TZ_OFFSET", "-6"))
 
 OUTDIR       = _env("OUTPUT_DIR", "./output")
-OUT_FILE     = _env("OPENRTU_FILENAME", "Open RTU's.xlsx")
+OUT_FILE     = _env("ODTU_FILENAME", "Open DTU's.xlsx")
 DO_UPLOAD    = _env("UPLOAD", "true").lower() in ("1", "true", "yes")
+SP_FOLDER    = _env("ODTU_SHAREPOINT_FOLDER", "DTU Report")
 
-AZ_TENANT  = _env("AZURE_TENANT_ID"); AZ_CLIENT = _env("AZURE_CLIENT_ID"); AZ_SECRET = _env("AZURE_CLIENT_SECRET")
-SP_HOST    = _env("SHAREPOINT_HOSTNAME"); SP_SITE = _env("SHAREPOINT_SITE_PATH")
-SP_FOLDER  = _env("OPENRTU_SHAREPOINT_FOLDER", "RTU Report")
+COLUMNS = ["Branch", "Created time", "Dispatch transportation unit ID", "DTU reference", "Load list ID",
+           "Master bill", "Transport company", "FLO", "Loaded handling units",
+           "Remaining", "Staging location", "Completion date", "Status", "Job number"]
+DATE_COLS = {"Created time", "Completion date"}
 
-COLUMNS = ["Branch", "Receive Transportation Unit ID", "RTU Reference", "Transport Company",
-           "Load Type", "Staging Location", "Drivers Name", "Expected Number of Packages",
-           "Unloaded Packages", "Number of Handling Units", "Unload Complete", "Created Time"]
-DATE_COLS = {"Unload Complete", "Created Time"}
-
-log = logging.getLogger("open_rtu_report")
+log = logging.getLogger("open_dtu_report")
 _cookies = http.cookiejar.CookieJar()
 _opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_cookies))
 
@@ -67,7 +68,6 @@ def _http(url, data=None, headers=None, method=None, timeout=180):
     return _opener.open(urllib.request.Request(url, data=data, headers=headers or {}, method=method), timeout=timeout)
 
 def parse_dt(s):
-    """Parse CargoWise DateTimeOffset, normalise to the fixed display offset, truncate to minute."""
     if not s:
         return None
     m = re.match(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?(?:\.\d+)?(Z|[+-]\d{2}:?\d{2})?", s)
@@ -143,36 +143,62 @@ class CargoWise:
             log.warning("Could not load country map (%s)", e)
         return m
 
-    def pull_open_rtus(self, branch_key):
-        self._select(branch_key)
-        filt = "WRH_SystemCreateTimeUtc ne null and WRH_UnloadCompleteTime eq null"
-        expand = ("Addresses($expand=Address($expand=OrgHeader)),"
-                  "StagingLocation($select=WLV_LocationString),"
-                  "WhsItemPackageStates($count=true;$top=2000;$select=WPS_IsHandlingUnit)")
-        sel = ("WRH_ReferenceNumber,WRH_VehicleReference,WRH_UnitType,WRH_SignedBy,"
-               "WRH_UnloadCompleteTime,WRH_SystemCreateTimeUtc")
+    def _paged(self, resource, params, branch_key, label):
         rows, skip, page = [], 0, 50
         while True:
-            params = {"$filter": filt, "$expand": expand, "$select": sel,
-                      "$top": str(page), "$skip": str(skip), "$orderby": "WRH_ReferenceNumber"}
+            p = dict(params); p["$top"] = str(page); p["$skip"] = str(skip)
             for _ in range(4):
                 try:
-                    d = self._get("WhsItemReceiveTransportationUnits", params); break
+                    d = self._get(resource, p); break
                 except urllib.error.HTTPError as e:
                     if e.code == 401:
                         log.info("  session expired, re-authenticating"); self.login(); self._select(branch_key); continue
                     raise
             else:
-                raise RuntimeError("repeated failures pulling open RTUs")
+                raise RuntimeError(f"repeated failures pulling {label}")
             batch = d.get("value", [])
             rows.extend(batch)
             if len(batch) < page:
                 break
             skip += page
+            if skip % 1000 == 0:
+                log.info("  ...%d", len(rows))
         return rows
 
-def transport_company(rtu, cmap):
-    for a in rtu.get("Addresses", []):
+    def pull_dtus(self, branch_key):
+        self._select(branch_key)
+        expand = ("Addresses($expand=Address($expand=OrgHeader)),"
+                  "WhsItemDispatchLoadListDTUPivots($expand=TransitDispatchLoadList("
+                  "$select=WDL_JobID;$expand=ReferenceNumbers($select=CE_EntryType,CE_EntryNum),"
+                  "StagingLocation($select=WLV_LocationString)))")
+        sel = "WDH_PK,WDH_ReferenceNumber,WDH_VehicleReference,WDH_SignedBy,WDH_LoadCompleteTime,WDH_SystemCreateTimeUtc"
+        params = {"$expand": expand, "$select": sel, "$orderby": "WDH_ReferenceNumber"}
+        return self._paged("WhsItemDispatchTransportationUnits", params, branch_key, "DTUs")
+
+    def load_view_map(self, pks, branch_key):
+        """Counts per DTU from TransitDispatchTransportationUnitLoadView, keyed by WDH_PK."""
+        sel = ("WDH_PK,LoadedLoosePackagesCount,TotalLoadedPackagesCount,TotalPlannedPackagesCount")
+        out = {}
+        CH = 25
+        for i in range(0, len(pks), CH):
+            chunk = pks[i:i + CH]
+            filt = " or ".join(f"WDH_PK eq {pk}" for pk in chunk)
+            for _ in range(4):
+                try:
+                    d = self._get("TransitDispatchTransportationUnitLoadViews",
+                                  {"$filter": filt, "$select": sel, "$top": str(CH)}); break
+                except urllib.error.HTTPError as e:
+                    if e.code == 401:
+                        log.info("  session expired, re-authenticating"); self.login(); self._select(branch_key); continue
+                    raise
+            else:
+                raise RuntimeError("repeated failures pulling load views")
+            for r in d.get("value", []):
+                out[r["WDH_PK"]] = r
+        return out
+
+def transport_company(dtu, cmap):
+    for a in dtu.get("Addresses", []):
         if a.get("E2_AddressType") == "TRA":
             ad = a.get("Address") or {}; oh = ad.get("OrgHeader") or {}
             name = a.get("E2_CompanyName") or oh.get("OH_FullName") or ad.get("OA_CompanyNameOverride") or ""
@@ -187,26 +213,56 @@ def transport_company(rtu, cmap):
             return ", ".join(x for x in (name, a1, a2, csz, country) if x)
     return ""
 
-def shape(branch, records, cmap):
+def _join_distinct(values):
+    seen, out = set(), []
+    for v in values:
+        if v and v not in seen:
+            seen.add(v); out.append(v)
+    return ", ".join(out)
+
+def load_lists(dtu):
+    return [(p.get("TransitDispatchLoadList") or {}) for p in dtu.get("WhsItemDispatchLoadListDTUPivots", [])]
+
+def status_of(dtu, lv):
+    """Derived dispatch status: Complete once load-complete is stamped, else
+    Loading if anything has been loaded, else Open. (Best-effort - the grid's
+    own 'Status' values were not visible to confirm exact wording.)"""
+    if dtu.get("WDH_LoadCompleteTime"):
+        return "Complete"
+    if (lv or {}).get("TotalLoadedPackagesCount", 0):
+        return "Loading"
+    return "Open"
+
+def shape(branch, records, lvmap, cmap):
     out = []
     for r in records:
-        ps = r.get("WhsItemPackageStates", [])
-        stg = (r.get("StagingLocation") or {}).get("WLV_LocationString") or ""
+        lv = lvmap.get(r["WDH_PK"], {})
+        lls = load_lists(r)
+        loose = lv.get("LoadedLoosePackagesCount", 0) or 0
+        total_loaded = lv.get("TotalLoadedPackagesCount", 0) or 0
+        total_planned = lv.get("TotalPlannedPackagesCount", 0) or 0
+        mabs, jobs = [], []
+        for ll in lls:
+            for ce in ll.get("ReferenceNumbers", []):
+                if ce.get("CE_EntryType") == "MAB":
+                    mabs.append(ce.get("CE_EntryNum"))
+                elif ce.get("CE_EntryType") == "FCO":
+                    jobs.append(ce.get("CE_EntryNum"))
         out.append({
             "Branch": branch,
-            "Receive Transportation Unit ID": r.get("WRH_ReferenceNumber"),
-            "RTU Reference": r.get("WRH_VehicleReference"),
-            "Transport Company": transport_company(r, cmap),
-            "Load Type": r.get("WRH_UnitType"),
-            "Staging Location": stg,
-            "Drivers Name": r.get("WRH_SignedBy"),
-            # Expected = expected packages from a booking/ASN. Open RTUs have none
-            # linked (no consignment divots / ASN), so this is 0 - matches the grid.
-            "Expected Number of Packages": 0,
-            "Unloaded Packages": r.get("WhsItemPackageStates@odata.count", 0),
-            "Number of Handling Units": sum(1 for p in ps if p.get("WPS_IsHandlingUnit")),
-            "Unload Complete": parse_dt(r.get("WRH_UnloadCompleteTime")),
-            "Created Time": parse_dt(r.get("WRH_SystemCreateTimeUtc")),
+            "Created time": parse_dt(r.get("WDH_SystemCreateTimeUtc")),
+            "Dispatch transportation unit ID": r.get("WDH_ReferenceNumber"),
+            "DTU reference": r.get("WDH_VehicleReference"),
+            "Load list ID": _join_distinct(ll.get("WDL_JobID") for ll in lls),
+            "Master bill": _join_distinct(mabs),
+            "Transport company": transport_company(r, cmap),
+            "FLO": loose,
+            "Loaded handling units": max(0, total_loaded - loose),
+            "Remaining": 0 if r.get("WDH_LoadCompleteTime") else max(0, total_planned - total_loaded),
+            "Staging location": _join_distinct((ll.get("StagingLocation") or {}).get("WLV_LocationString") for ll in lls),
+            "Completion date": parse_dt(r.get("WDH_LoadCompleteTime")),
+            "Status": status_of(r, lv),
+            "Job number": _join_distinct(jobs),
         })
     return out
 
@@ -214,10 +270,10 @@ def build_workbook(rows, path):
     import openpyxl
     from openpyxl.utils import get_column_letter
     from openpyxl.worksheet.table import Table, TableStyleInfo
-    widths = {"Branch": 8, "Receive Transportation Unit ID": 26, "RTU Reference": 18,
-              "Transport Company": 55, "Load Type": 10, "Staging Location": 16, "Drivers Name": 18,
-              "Expected Number of Packages": 24, "Unloaded Packages": 16,
-              "Number of Handling Units": 22, "Unload Complete": 17, "Created Time": 17}
+    widths = {"Branch": 8, "Created time": 17, "Dispatch transportation unit ID": 26, "DTU reference": 20,
+              "Load list ID": 28, "Master bill": 22, "Transport company": 40,
+              "FLO": 8, "Loaded handling units": 18, "Remaining": 11, "Staging location": 16,
+              "Completion date": 17, "Status": 12, "Job number": 16}
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Receive Transportation Unit"
     ws.append(COLUMNS)
     for r in rows:
@@ -228,41 +284,23 @@ def build_workbook(rows, path):
             for cell in ws[L][1:]:
                 cell.number_format = "dd-mmm-yy hh:mm"
     ws.freeze_panes = "A2"
-    ws.add_table(Table(displayName="OpenRTU",
+    ws.add_table(Table(displayName="OpenDTU",
                        ref=f"A1:{get_column_letter(len(COLUMNS))}{len(rows) + 1}",
                        tableStyleInfo=TableStyleInfo(name="TableStyleMedium2", showRowStripes=True)))
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True); wb.save(path)
 
-def upload(local_path):
-    for k, v in {"AZURE_TENANT_ID": AZ_TENANT, "AZURE_CLIENT_ID": AZ_CLIENT, "AZURE_CLIENT_SECRET": AZ_SECRET,
-                 "SHAREPOINT_HOSTNAME": SP_HOST, "SHAREPOINT_SITE_PATH": SP_SITE}.items():
-        if not v:
-            sys.exit(f"FATAL: UPLOAD=true but {k} is not set")
-    graph = "https://graph.microsoft.com/v1.0"
-    body = urllib.parse.urlencode({"client_id": AZ_CLIENT, "client_secret": AZ_SECRET,
-                                   "scope": "https://graph.microsoft.com/.default",
-                                   "grant_type": "client_credentials"}).encode()
-    tok = json.load(_http(f"https://login.microsoftonline.com/{AZ_TENANT}/oauth2/v2.0/token", data=body,
-                          method="POST", headers={"Content-Type": "application/x-www-form-urlencoded"}))["access_token"]
-    H = {"Authorization": "Bearer " + tok}
-    site = json.load(_http(f"{graph}/sites/{SP_HOST}:{SP_SITE}", headers=H))
-    drive = json.load(_http(f"{graph}/sites/{site['id']}/drive", headers=H))
-    dest = "/".join(p for p in (SP_FOLDER, os.path.basename(local_path)) if p)
-    url = f"{graph}/drives/{drive['id']}/root:/{urllib.parse.quote(dest)}:/content"
-    res = json.load(_http(url, data=open(local_path, "rb").read(), method="PUT",
-                          headers={**H, "Content-Type": "application/octet-stream"}))
-    log.info("Uploaded: %s (%s bytes)", res.get("webUrl"), res.get("size"))
-
 def main():
     logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(asctime)s %(levelname)s %(message)s")
-    log.info("Open RTU's Report - branches=%s, created has date + unload complete is blank", BRANCH_CODES)
+    log.info("Open DTU's Report - branches=%s, all dispatch units (no filter)", BRANCH_CODES)
     cw = CargoWise(); cw.login()
     cmap = cw.country_map()
     all_rows = []
     for code in BRANCH_CODES:
-        recs = cw.pull_open_rtus(cw.branch_map[code])
-        rows = shape(code, recs, cmap)
-        log.info("  %s: %d open RTUs", code, len(rows))
+        bkey = cw.branch_map[code]
+        recs = cw.pull_dtus(bkey)
+        lvmap = cw.load_view_map([r["WDH_PK"] for r in recs], bkey)
+        rows = shape(code, recs, lvmap, cmap)
+        log.info("  %s: %d DTUs", code, len(rows))
         all_rows.extend(rows)
     out_path = os.path.join(OUTDIR, OUT_FILE)
     build_workbook(all_rows, out_path)

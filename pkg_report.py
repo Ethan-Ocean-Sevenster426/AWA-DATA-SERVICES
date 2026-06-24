@@ -58,7 +58,7 @@ DO_UPLOAD    = _env("UPLOAD", "true").lower() in ("1", "true", "yes")
 
 AZ_TENANT  = _env("AZURE_TENANT_ID"); AZ_CLIENT = _env("AZURE_CLIENT_ID"); AZ_SECRET = _env("AZURE_CLIENT_SECRET")
 SP_HOST    = _env("SHAREPOINT_HOSTNAME"); SP_SITE = _env("SHAREPOINT_SITE_PATH")
-SP_FOLDER  = _env("PKG_SHAREPOINT_FOLDER", _env("RTU_SHAREPOINT_FOLDER", "RTU Report"))
+SP_FOLDER  = _env("PKG_SHAREPOINT_FOLDER", "RTU Report")
 
 COLUMNS = ["Branch", "Receive Transportation Unit ID", "Receive Gate in Time", "RTU Unload Complete",
            "Receive Gate out Time", "RCN Reference", "Package ID", "Quantity", "Package Type",

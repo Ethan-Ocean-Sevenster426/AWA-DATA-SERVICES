@@ -58,7 +58,7 @@ AZ_CLIENT      = _env("AZURE_CLIENT_ID")
 AZ_SECRET      = _env("AZURE_CLIENT_SECRET")
 SP_HOST        = _env("SHAREPOINT_HOSTNAME")
 SP_SITE        = _env("SHAREPOINT_SITE_PATH")           # e.g. /sites/DataPrime
-SP_FOLDER      = _env("SHAREPOINT_FOLDER", "External Report Transit Pull")          # e.g. External Report Transit Pull
+SP_FOLDER      = _env("SHAREPOINT_FOLDER", "External Customers Freight Report")
 
 log = logging.getLogger("transit_report")
 

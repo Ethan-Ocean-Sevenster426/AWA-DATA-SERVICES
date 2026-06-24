@@ -19,3 +19,7 @@ venv/
 Thumbs.db
 .vscode/
 .idea/
+
+# Dev scratch / CargoWise metadata + saved-search dumps (not needed at runtime)
+_md.xml
+_opendtu.json
