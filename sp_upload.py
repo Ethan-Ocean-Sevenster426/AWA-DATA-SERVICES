@@ -86,6 +86,24 @@ def _archive_existing(H, did, rel, fname):
     except Exception as e:
         log.warning("  archive prune skipped (%s)", e)
 
+def download(folder, fname, local_path):
+    """Download {SHAREPOINT_ROOT}/{folder}/{fname} to local_path. Returns True if it
+    existed (and was written), False if not found (HTTP 404)."""
+    root = (_env("SHAREPOINT_ROOT", "Clients/ISCM") or "").strip("/")
+    H, did = _connect()
+    rel = "/".join(p for p in (root, (folder or "").strip("/"), fname) if p)
+    url = f"{GRAPH}/drives/{did}/root:/{_enc(rel)}:/content"
+    try:
+        data = _http(url, headers=H).read()
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return False
+        raise
+    os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
+    with open(local_path, "wb") as f:
+        f.write(data)
+    return True
+
 def upload(local_path, folder, archive=True):
     root = (_env("SHAREPOINT_ROOT", "Clients/ISCM") or "").strip("/")
     H, did = _connect()

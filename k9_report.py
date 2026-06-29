@@ -323,6 +323,17 @@ def main():
     log.info("  %s: %d packages in K9 inventory today", BRANCH_CODE, len(today_rows))
 
     out_path = os.path.join(OUTDIR, OUT_FILE)
+    # Pull the current master from SharePoint first so we always EXTEND it (history +
+    # every prior snapshot), then append/refresh today's rows - never replace.
+    if DO_UPLOAD:
+        try:
+            import sp_upload
+            if sp_upload.download(SP_FOLDER, OUT_FILE, out_path):
+                log.info("  pulled current master from SharePoint")
+            else:
+                log.info("  no master on SharePoint yet; starting a fresh one")
+        except Exception as e:
+            log.warning("  could not pull master (%s); extending local copy instead", e)
     prior = _load_existing(out_path, snapshot_date)
     all_rows = prior + today_rows
     build_workbook(all_rows, out_path)
