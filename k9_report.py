@@ -17,7 +17,7 @@ Re-running on the same day is idempotent: today's rows are replaced, not doubled
 
 Config is environment-driven (see .env.example). No secrets are stored in code.
 """
-import os, sys, json, re, logging, datetime
+import os, sys, json, re, csv, logging, datetime
 import urllib.request, urllib.parse, urllib.error, http.cookiejar
 
 def _load_dotenv(path=".env"):
@@ -56,7 +56,7 @@ EXCLUDE_LOCATIONS = set(s.strip().upper() for s in _env(
     "CON_DOOR1,CON_DOOR2,CON_DOOR3,DOOR-1,DOOR-2,DOOR-12").split(",") if s.strip())
 
 OUTDIR       = _env("OUTPUT_DIR", "./output")
-OUT_FILE     = _env("K9_FILENAME", "K9 Line Item Inventory.xlsx")
+OUT_FILE     = _env("K9_FILENAME", "K9 Line Item Inventory.csv")   # one growing CSV master
 SHEET_NAME   = _env("K9_SHEET_NAME", "Inventory")
 DO_UPLOAD    = _env("UPLOAD", "true").lower() in ("1", "true", "yes")
 
@@ -263,57 +263,35 @@ def shape(records, snapshot_date):
 # --------------------------------------------------------------------------- #
 # Maintain the single growing workbook
 # --------------------------------------------------------------------------- #
+def _csv_cell(v):
+    if isinstance(v, datetime.datetime):
+        return v.strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(v, datetime.date):
+        return v.strftime("%Y-%m-%d")
+    return "" if v is None else v
+
 def _load_existing(path, snapshot_date):
-    """Return prior rows from the master file, dropping any already tagged with
-    today's snapshot date (so a re-run replaces today rather than duplicating it)."""
+    """Prior rows from the master CSV, dropping today's snapshot (idempotent re-run).
+    CSV streams fast and has no row limit - right for one ever-growing master."""
     if not os.path.exists(path):
         return []
-    import openpyxl
-    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
-    ws = wb[SHEET_NAME] if SHEET_NAME in wb.sheetnames else wb[wb.sheetnames[0]]
-    it = ws.iter_rows(values_only=True)
-    try:
-        header = list(next(it))
-    except StopIteration:
-        wb.close(); return []
-    idx = {h: i for i, h in enumerate(header)}
-    di = idx.get("Inventory Date")
+    today = snapshot_date.strftime("%Y-%m-%d")
     kept = []
-    for row in it:
-        if not any(c is not None for c in row):
-            continue
-        rec = {h: row[idx[h]] if idx[h] < len(row) else None for h in COLUMNS if h in idx}
-        sd = rec.get("Inventory Date")
-        if isinstance(sd, datetime.datetime):
-            sd = sd.date()
-        if sd == snapshot_date:
-            continue                      # drop today's prior rows (idempotent re-run)
-        kept.append(rec)
-    wb.close()
+    with open(path, newline="", encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            if (r.get("Inventory Date") or "")[:10] == today:
+                continue                      # drop today's prior rows
+            kept.append({c: r.get(c, "") for c in COLUMNS})
     return kept
 
 def build_workbook(rows, path):
-    import openpyxl
-    from openpyxl.utils import get_column_letter
-    from openpyxl.worksheet.table import Table, TableStyleInfo
-    wide = {"Inventory Date": 14, "Package ID": 22, "RCN Reference": 14, "Location": 12,
-            "Receive Gate out Time": 18, "Status": 16, "Consignee": 45, "Consignor": 45,
-            "Booking Party": 45, "Volume": 12, "Weight": 12, "Volume M3": 11, "Weight KG": 11}
-    wb = openpyxl.Workbook(); ws = wb.active; ws.title = SHEET_NAME
-    ws.append(COLUMNS)
-    for r in rows:
-        ws.append([r.get(c) for c in COLUMNS])
-    for ci, col in enumerate(COLUMNS, 1):
-        L = get_column_letter(ci); ws.column_dimensions[L].width = wide.get(col, 12)
-        if col in DATE_COLS:
-            fmt = "dd-mmm-yy" if col == "Inventory Date" else "dd-mmm-yy hh:mm"
-            for cell in ws[L][1:]:
-                cell.number_format = fmt
-    ws.freeze_panes = "A2"
-    ws.add_table(Table(displayName="K9Inventory",
-                       ref=f"A1:{get_column_letter(len(COLUMNS))}{len(rows) + 1}",
-                       tableStyleInfo=TableStyleInfo(name="TableStyleMedium2", showRowStripes=True)))
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True); wb.save(path)
+    """Write the master as CSV (fast, unbounded). Name kept for call-site compatibility."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=COLUMNS)
+        w.writeheader()
+        for r in rows:
+            w.writerow({c: _csv_cell(r.get(c)) for c in COLUMNS})
 
 def main():
     logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(asctime)s %(levelname)s %(message)s")
@@ -324,14 +302,21 @@ def main():
     today_rows = shape(records, snapshot_date)
     log.info("  %s: %d packages in K9 inventory today", BRANCH_CODE, len(today_rows))
 
-    # The live file holds recent daily snapshots only (small + fast). The big cleaned
-    # history is a separate static file the dashboard unions in - never reprocessed here.
+    # Pull the one master CSV from SharePoint, then append/refresh today (never replace).
     out_path = os.path.join(OUTDIR, OUT_FILE)
+    if DO_UPLOAD:
+        try:
+            import sp_upload
+            if sp_upload.download(SP_FOLDER, OUT_FILE, out_path):
+                log.info("  pulled master from SharePoint")
+            else:
+                log.info("  no master on SharePoint yet; starting a fresh one")
+        except Exception as e:
+            log.warning("  could not pull master (%s); extending local copy", e)
     prior = _load_existing(out_path, snapshot_date)
     all_rows = prior + today_rows
     build_workbook(all_rows, out_path)
-    log.info("Workbook written: %s (%d rows total, %d days)", out_path, len(all_rows),
-             len({r.get("Inventory Date") for r in all_rows}))
+    log.info("Master written: %s (%d rows total)", out_path, len(all_rows))
 
     if DO_UPLOAD:
         import sp_upload

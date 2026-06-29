@@ -111,9 +111,32 @@ def upload(local_path, folder, archive=True):
     fname = os.path.basename(local_path)
     if archive:                       # single maintained files (e.g. K9) pass archive=False
         _archive_existing(H, did, rel, fname)
-    url = f"{GRAPH}/drives/{did}/root:/{_enc(rel + '/' + fname)}:/content"
+    size = os.path.getsize(local_path)
+    base = f"{GRAPH}/drives/{did}/root:/{_enc(rel + '/' + fname)}"
+    if size <= 4 * 1024 * 1024:       # small file: single PUT
+        with open(local_path, "rb") as f:
+            content = f.read()
+        res = json.load(_http(base + ":/content", data=content, method="PUT",
+                              headers={**H, "Content-Type": "application/octet-stream"}))
+        log.info("Uploaded: %s (%s bytes)", res.get("webUrl"), res.get("size"))
+        return
+    # large file (no 250 MB / row limits): resumable chunked upload session
+    sess = json.load(_http(base + ":/createUploadSession",
+                           data=json.dumps({"item": {"@microsoft.graph.conflictBehavior": "replace"}}).encode(),
+                           method="POST", headers={**H, "Content-Type": "application/json"}))
+    upload_url = sess["uploadUrl"]
+    CHUNK = 10 * 1024 * 1024          # 10 MB chunks (multiple of 320 KiB)
     with open(local_path, "rb") as f:
-        content = f.read()
-    res = json.load(_http(url, data=content, method="PUT",
-                          headers={**H, "Content-Type": "application/octet-stream"}))
-    log.info("Uploaded: %s (%s bytes)", res.get("webUrl"), res.get("size"))
+        start = 0
+        while start < size:
+            chunk = f.read(CHUNK)
+            end = start + len(chunk) - 1
+            r = _http(upload_url, data=chunk, method="PUT",
+                      headers={"Content-Length": str(len(chunk)),
+                               "Content-Range": f"bytes {start}-{end}/{size}"})
+            if end + 1 >= size:
+                res = json.load(r)
+                log.info("Uploaded (chunked): %s (%s bytes)", res.get("webUrl"), size)
+            else:
+                r.read()                 # 202 Accepted, discard body
+            start = end + 1
