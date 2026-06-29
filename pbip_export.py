@@ -288,7 +288,7 @@ def tmdl_calendar_table():
         L.append("")
     L.append("\tpartition Calendar = calculated")
     L.append("\t\tmode: import")
-    L.append("\t\tsource = CALENDAR(DATE(2023, 1, 1), DATE(2027, 12, 31))")
+    L.append("\t\tsource = CALENDAR(MIN('K9 Inventory'[Inventory Date]), MAX('K9 Inventory'[Inventory Date]))")
     L.append("")
     return "\n".join(L)
 
@@ -376,6 +376,29 @@ def entity_table(name, x, y, w, h, entity, cols):
                    "drillFilterOtherVisuals": True,
                    "visualContainerObjects": {
                        "visualHeader": [{"properties": {"show": {"expr": {"Literal": {"Value": "false"}}}}}]}},
+    }
+
+def cal_slicer(name, x, y, w, h):
+    """Date hierarchy slicer (Year > Quarter > Month > Day) on the Calendar table -
+    filters every related table through the relationships."""
+    fields = ["Year", "Quarter", "Month", "Date"]
+    projs = [{"field": {"Column": {"Expression": {"SourceRef": {"Entity": "Calendar"}}, "Property": f}},
+              "queryRef": f"Calendar.{f}", "nativeQueryRef": f} for f in fields]
+    return {
+        "$schema": "https://developer.microsoft.com/json-schemas/fabric/item/report/definition/visualContainer/1.0.0/schema.json",
+        "name": name,
+        "position": {"x": x, "y": y, "z": 900, "width": w, "height": h, "tabOrder": 0},
+        "visual": {
+            "visualType": "slicer",
+            "query": {"queryState": {"Values": {"projections": projs}}},
+            "objects": {
+                "data": [{"properties": {"mode": {"expr": {"Literal": {"Value": "'Dropdown'"}}}}}],
+                "title": [{"properties": {"show": {"expr": {"Literal": {"Value": "false"}}}}}],
+            },
+            "drillFilterOtherVisuals": True,
+            "visualContainerObjects": {
+                "visualHeader": [{"properties": {"show": {"expr": {"Literal": {"Value": "false"}}}}}]},
+        },
     }
 
 def image_visual(name, x, y, w, h, item_name="logo.png"):
@@ -488,8 +511,9 @@ def build(out_dir, m_source, with_visuals=True, logo_path=None, alerts_source=No
             hv.append(image_visual(f"logo_{pid}", 8, 8, 150, 84))
             sx0 = 168
         sw = (1272 - sx0 - 3 * 8) // 4
-        for i, (k, prop) in enumerate([("date", "Inventory Date"), ("loc", "Location"),
-                                       ("bp", "Booking Party"), ("st", "Status")]):
+        hv.append(cal_slicer(f"sl_date_{pid}", sx0, 8, sw, 84))     # Year>Quarter>Month>Day
+        for i, (k, prop) in enumerate([("loc", "Location"), ("bp", "Booking Party"),
+                                       ("st", "Status")], start=1):
             hv.append(slicer(f"sl_{k}_{pid}", sx0 + i * (sw + 8), 8, sw, 84, prop))
         return hv
 
