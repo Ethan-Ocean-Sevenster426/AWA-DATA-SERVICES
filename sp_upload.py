@@ -86,12 +86,13 @@ def _archive_existing(H, did, rel, fname):
     except Exception as e:
         log.warning("  archive prune skipped (%s)", e)
 
-def upload(local_path, folder):
+def upload(local_path, folder, archive=True):
     root = (_env("SHAREPOINT_ROOT", "Clients/ISCM") or "").strip("/")
     H, did = _connect()
     rel = "/".join(p for p in (root, (folder or "").strip("/")) if p)
     fname = os.path.basename(local_path)
-    _archive_existing(H, did, rel, fname)
+    if archive:                       # single maintained files (e.g. K9) pass archive=False
+        _archive_existing(H, did, rel, fname)
     url = f"{GRAPH}/drives/{did}/root:/{_enc(rel + '/' + fname)}:/content"
     with open(local_path, "rb") as f:
         content = f.read()

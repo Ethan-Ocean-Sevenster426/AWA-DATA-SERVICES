@@ -330,7 +330,16 @@ def main():
              len({r.get("Inventory Date") for r in all_rows}))
 
     if DO_UPLOAD:
-        import sp_upload; sp_upload.upload(out_path, SP_FOLDER)
+        import sp_upload
+        try:
+            # single maintained file: no per-run archive copies (SharePoint keeps version history)
+            sp_upload.upload(out_path, SP_FOLDER, archive=False)
+        except urllib.error.HTTPError as e:
+            if e.code == 423:          # file open in Excel/online -> locked; don't fail the run
+                log.warning("SharePoint copy is LOCKED (file open in Excel/online?); "
+                            "local copy updated, will upload on the next run")
+            else:
+                raise
     else:
         log.info("UPLOAD disabled; skipping SharePoint upload")
     log.info("Done.")
