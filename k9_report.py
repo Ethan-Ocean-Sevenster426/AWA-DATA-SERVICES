@@ -110,10 +110,12 @@ def fmt_qty(v, unit):
     return f"{s} {unit}".strip() if unit else s
 
 def to_m3(v, unit):
-    return round((v or 0) * M3_PER.get((unit or "M3").upper(), 1.0), 6)
+    m = round((v or 0) * M3_PER.get((unit or "M3").upper(), 1.0), 6)
+    return None if m > 50 else m        # >50 m3 for one package = bad source data
 
 def to_kg(v, unit):
-    return round((v or 0) * KG_PER.get((unit or "KG").upper(), 1.0), 3)
+    k = round((v or 0) * KG_PER.get((unit or "KG").upper(), 1.0), 3)
+    return None if k > 50000 else k      # >50 t for one package = bad source data
 
 def status_text(code):
     if not code:
