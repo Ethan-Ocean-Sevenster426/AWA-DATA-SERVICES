@@ -8,7 +8,7 @@ the warehouse (PUT etc.), EXCLUDING booked/departed/loaded/packing statuses and
 the door/build staging locations.
 
 Unlike the other reports, this one MAINTAINS A SINGLE GROWING FILE: each run adds
-today's snapshot (one row per package, tagged with a "Snapshot Date") to one flat
+today's snapshot (one row per package, tagged with a "Inventory Date") to one flat
 sheet and re-uploads it. That single table is the Power BI source - Power BI then
 builds the date matrix (Shipment Count = distinct RCN, Total Weight KG, Total CBM)
 itself. No sheet-per-day.
@@ -65,10 +65,10 @@ SP_HOST    = _env("SHAREPOINT_HOSTNAME"); SP_SITE = _env("SHAREPOINT_SITE_PATH")
 SP_FOLDER  = _env("K9_SHAREPOINT_FOLDER", "K9")
 
 # Flat table - one row per package per snapshot day. This IS the Power BI source.
-COLUMNS = ["Snapshot Date", "Package ID", "RCN Reference", "Location", "Receive Gate out Time",
+COLUMNS = ["Inventory Date", "Package ID", "RCN Reference", "Location", "Receive Gate out Time",
            "Status", "Consignee", "Consignor", "Booking Party", "Volume", "Weight",
            "Volume M3", "Weight KG"]
-DATE_COLS = {"Snapshot Date", "Receive Gate out Time"}
+DATE_COLS = {"Inventory Date", "Receive Gate out Time"}
 
 STATUS_DESC = {"ARV": "Arrived", "PUT": "Putaway", "PIC": "Picked", "STA": "Staged",
                "CTT": "Counted", "REC": "Received", "RCV": "Received"}
@@ -242,7 +242,7 @@ def shape(records, snapshot_date):
             vol_u = pkg.get("KP_VolumeUQ") or "M3"
             wt_u = pkg.get("KP_WeightUQ") or "KG"
             out.append({
-                "Snapshot Date": snapshot_date,
+                "Inventory Date": snapshot_date,
                 "Package ID": kph.get("KPH_PackageID"),
                 "RCN Reference": rcn,
                 "Location": loc,
@@ -275,13 +275,13 @@ def _load_existing(path, snapshot_date):
     except StopIteration:
         wb.close(); return []
     idx = {h: i for i, h in enumerate(header)}
-    di = idx.get("Snapshot Date")
+    di = idx.get("Inventory Date")
     kept = []
     for row in it:
         if not any(c is not None for c in row):
             continue
         rec = {h: row[idx[h]] if idx[h] < len(row) else None for h in COLUMNS if h in idx}
-        sd = rec.get("Snapshot Date")
+        sd = rec.get("Inventory Date")
         if isinstance(sd, datetime.datetime):
             sd = sd.date()
         if sd == snapshot_date:
@@ -294,7 +294,7 @@ def build_workbook(rows, path):
     import openpyxl
     from openpyxl.utils import get_column_letter
     from openpyxl.worksheet.table import Table, TableStyleInfo
-    wide = {"Snapshot Date": 14, "Package ID": 22, "RCN Reference": 14, "Location": 12,
+    wide = {"Inventory Date": 14, "Package ID": 22, "RCN Reference": 14, "Location": 12,
             "Receive Gate out Time": 18, "Status": 16, "Consignee": 45, "Consignor": 45,
             "Booking Party": 45, "Volume": 12, "Weight": 12, "Volume M3": 11, "Weight KG": 11}
     wb = openpyxl.Workbook(); ws = wb.active; ws.title = SHEET_NAME
@@ -304,7 +304,7 @@ def build_workbook(rows, path):
     for ci, col in enumerate(COLUMNS, 1):
         L = get_column_letter(ci); ws.column_dimensions[L].width = wide.get(col, 12)
         if col in DATE_COLS:
-            fmt = "dd-mmm-yy" if col == "Snapshot Date" else "dd-mmm-yy hh:mm"
+            fmt = "dd-mmm-yy" if col == "Inventory Date" else "dd-mmm-yy hh:mm"
             for cell in ws[L][1:]:
                 cell.number_format = fmt
     ws.freeze_panes = "A2"
@@ -327,7 +327,7 @@ def main():
     all_rows = prior + today_rows
     build_workbook(all_rows, out_path)
     log.info("Workbook written: %s (%d rows total, %d days)", out_path, len(all_rows),
-             len({r.get("Snapshot Date") for r in all_rows}))
+             len({r.get("Inventory Date") for r in all_rows}))
 
     if DO_UPLOAD:
         import sp_upload; sp_upload.upload(out_path, SP_FOLDER)
