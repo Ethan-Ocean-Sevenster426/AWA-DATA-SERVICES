@@ -43,6 +43,7 @@ REPORTS = [
     ("unknown_received_report.py",     "Unknown Received Report (CON)"),
     ("dtu_report.py",                  "DTU (CCC)"),
     ("open_dtu_report.py",             "Open DTU's (CCC)"),
+    ("k9_report.py",                   "K9 Line Item Inventory (CON)"),
 ]
 
 # Per-report run days (Mon=0, Tue=1, Wed=2, Thu=3, Fri=4, Sat=5, Sun=6).
