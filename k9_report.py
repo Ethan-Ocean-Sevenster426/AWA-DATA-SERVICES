@@ -62,7 +62,7 @@ DO_UPLOAD    = _env("UPLOAD", "true").lower() in ("1", "true", "yes")
 
 AZ_TENANT  = _env("AZURE_TENANT_ID"); AZ_CLIENT = _env("AZURE_CLIENT_ID"); AZ_SECRET = _env("AZURE_CLIENT_SECRET")
 SP_HOST    = _env("SHAREPOINT_HOSTNAME"); SP_SITE = _env("SHAREPOINT_SITE_PATH")
-SP_FOLDER  = _env("K9_SHAREPOINT_FOLDER", "K9 Report")
+SP_FOLDER  = _env("K9_SHAREPOINT_FOLDER", "K9")
 
 # Flat table - one row per package per snapshot day. This IS the Power BI source.
 COLUMNS = ["Snapshot Date", "Package ID", "RCN Reference", "Location", "Receive Gate out Time",
