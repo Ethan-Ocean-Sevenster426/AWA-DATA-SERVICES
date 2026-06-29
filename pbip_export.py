@@ -151,6 +151,12 @@ THEME = {
             "header": [{"fontColor": {"solid": {"color": NAVY}}, "bold": True}],
             "items": [{"fontColor": {"solid": {"color": NAVY}}}],
         }},
+        "lineChart": {"*": {
+            "lineStyles": [{"strokeWidth": 3, "interpolation": "smooth", "smoothType": "monotone"}],
+        }},
+        "lineClusteredColumnComboChart": {"*": {
+            "lineStyles": [{"strokeWidth": 3, "interpolation": "smooth", "smoothType": "monotone"}],
+        }},
         "page": {"*": {
             "background": [{"color": {"solid": {"color": "#EEF3FB"}}, "transparency": 0}],
             "outspace": [{"color": {"solid": {"color": "#EEF3FB"}}, "transparency": 0}],
@@ -527,7 +533,7 @@ def build(out_dir, m_source, with_visuals=True, logo_path=None, alerts_source=No
             "Values": [M("Package Count"), M("Total Weight (KG)"), M("Total CBM (M3)")]}),
             "Detailed Consignee Breakdown"),
         titled(visual_json("donut_main", "donutChart", 8, 396, 310, 316, {
-            "Category": [C("Booking Party")], "Values": [M("Total CBM (M3)")]}),
+            "Category": [C("Booking Party")], "Y": [M("Total CBM (M3)")]}),
             "CBM Share by Booking Party"),
         titled(visual_json("bar_main", "clusteredBarChart", 326, 396, 310, 316, {
             "Category": [C("Consignee")], "Y": [M("Total Weight (KG)")]}),
@@ -555,7 +561,7 @@ def build(out_dir, m_source, with_visuals=True, logo_path=None, alerts_source=No
             "Category": [C("Booking Party")], "Y": [M("Package Count")]}),
             "Packages by Booking Party"),
         titled(visual_json("donut_bp", "donutChart", 644, 104, 628, 608, {
-            "Category": [C("Booking Party")], "Values": [M("Total CBM (M3)")]}),
+            "Category": [C("Booking Party")], "Y": [M("Total CBM (M3)")]}),
             "CBM Share by Booking Party"),
     ])
     add_page("byconsignee", "By Consignee", header("cn") + [
