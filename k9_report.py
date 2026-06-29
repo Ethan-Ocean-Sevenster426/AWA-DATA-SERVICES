@@ -56,7 +56,7 @@ EXCLUDE_LOCATIONS = set(s.strip().upper() for s in _env(
     "CON_DOOR1,CON_DOOR2,CON_DOOR3,DOOR-1,DOOR-2,DOOR-12").split(",") if s.strip())
 
 OUTDIR       = _env("OUTPUT_DIR", "./output")
-OUT_FILE     = _env("K9_FILENAME", "K9 Line Item Inventory.csv")   # one growing CSV master
+OUT_FILE     = _env("K9_FILENAME", "K9 Line Item Inventory.xlsx")   # one growing xlsx master
 SHEET_NAME   = _env("K9_SHEET_NAME", "Inventory")
 DO_UPLOAD    = _env("UPLOAD", "true").lower() in ("1", "true", "yes")
 
@@ -263,35 +263,48 @@ def shape(records, snapshot_date):
 # --------------------------------------------------------------------------- #
 # Maintain the single growing workbook
 # --------------------------------------------------------------------------- #
-def _csv_cell(v):
-    if isinstance(v, datetime.datetime):
-        return v.strftime("%Y-%m-%d %H:%M:%S")
-    if isinstance(v, datetime.date):
-        return v.strftime("%Y-%m-%d")
-    return "" if v is None else v
-
 def _load_existing(path, snapshot_date):
-    """Prior rows from the master CSV, dropping today's snapshot (idempotent re-run).
-    CSV streams fast and has no row limit - right for one ever-growing master."""
+    """Prior rows from the master xlsx, dropping today's snapshot (idempotent re-run)."""
     if not os.path.exists(path):
         return []
-    today = snapshot_date.strftime("%Y-%m-%d")
+    import openpyxl
+    wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    ws = wb[SHEET_NAME] if SHEET_NAME in wb.sheetnames else wb[wb.sheetnames[0]]
+    it = ws.iter_rows(values_only=True)
+    try:
+        header = list(next(it))
+    except StopIteration:
+        wb.close(); return []
+    idx = {h: i for i, h in enumerate(header)}
     kept = []
-    with open(path, newline="", encoding="utf-8") as f:
-        for r in csv.DictReader(f):
-            if (r.get("Inventory Date") or "")[:10] == today:
-                continue                      # drop today's prior rows
-            kept.append({c: r.get(c, "") for c in COLUMNS})
+    for row in it:
+        if not any(c is not None for c in row):
+            continue
+        rec = {h: (row[idx[h]] if idx[h] < len(row) else None) for h in COLUMNS if h in idx}
+        sd = rec.get("Inventory Date")
+        if isinstance(sd, datetime.datetime):
+            sd = sd.date()
+        elif isinstance(sd, str):
+            try:
+                sd = datetime.date.fromisoformat(sd[:10])
+            except ValueError:
+                sd = None
+        if sd == snapshot_date:
+            continue                          # drop today's prior rows
+        kept.append(rec)
+    wb.close()
     return kept
 
 def build_workbook(rows, path):
-    """Write the master as CSV (fast, unbounded). Name kept for call-site compatibility."""
+    """Write the master as xlsx using fast write-only mode (no per-cell formatting)."""
+    import openpyxl
+    wb = openpyxl.Workbook(write_only=True)
+    ws = wb.create_sheet(SHEET_NAME)
+    ws.append(COLUMNS)
+    for r in rows:
+        ws.append([r.get(c) for c in COLUMNS])
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=COLUMNS)
-        w.writeheader()
-        for r in rows:
-            w.writerow({c: _csv_cell(r.get(c)) for c in COLUMNS})
+    wb.save(path)
 
 def main():
     logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(asctime)s %(levelname)s %(message)s")

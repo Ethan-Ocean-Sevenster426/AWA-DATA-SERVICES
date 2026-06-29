@@ -23,7 +23,7 @@ ENTITY = "K9 Inventory"
 # Power Query that pulls the maintained K9 file from SharePoint (proven query).
 M_SOURCE = '''let
     K9 = SharePoint.Contents("https://magnumopusconsultantspty352.sharepoint.com/sites/DataPrime", [ApiVersion = 15]){[Name="Shared Documents"]}[Content]{[Name="Clients"]}[Content]{[Name="ISCM"]}[Content]{[Name="K9"]}[Content],
-    Source = Csv.Document(K9{[Name="K9 Line Item Inventory.csv"]}[Content], [Delimiter=",", Encoding=65001, QuoteStyle=QuoteStyle.Csv]),
+    Source = Excel.Workbook(K9{[Name="K9 Line Item Inventory.xlsx"]}[Content], null, true){[Item="Inventory",Kind="Sheet"]}[Data],
     Promoted = Table.PromoteHeaders(Source, [PromoteAllScalars=true]),
     Typed = Table.TransformColumnTypes(Promoted, {{"Inventory Date", type date}, {"Receive Gate out Time", type datetime}, {"Volume M3", type number}, {"Weight KG", type number}})
 in
